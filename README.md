@@ -1,4 +1,4 @@
-<h1 align="center">Device Activity Tracker</h1>
+<h1 align="center">Skaine Device Activity Tracker</h1>
 <p align="center">WhatsApp Activity Tracker via RTT Analysis</p>
 
 <p align="center">
