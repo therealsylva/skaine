@@ -9,7 +9,7 @@ on:
 jobs:
   audit:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
     steps:
       - name: Install APK inspection tools
         run: |
@@ -110,6 +110,51 @@ jobs:
           } >> audit/report.txt
           rm -rf audit/unpacked
           find audit -maxdepth 1 -type f -printf '%f %s bytes\n' | sort > audit/manifest.txt
+      - name: Inspect native process and root behavior
+        run: |
+          mkdir -p audit/native
+          unzip -p candidate.apk lib/arm64-v8a/libsoimodclient.so > audit/native/libsoimodclient-arm64.so
+          {
+            echo
+            echo "=== ROOT / PROCESS ACCESS INDICATORS ==="
+            strings -a audit/native/libsoimodclient-arm64.so |
+              grep -Eai 'com\.dts\.freefire|/proc/|process_vm_|ptrace|\bsu\b|magisk|zygisk|memfd|maps|mem_rw|pidof|kill|inject|root|socket|offset' |
+              sort -u | head -n 700 || true
+            echo
+            echo "=== ELF IMPORTS / EXPORTS ==="
+            readelf -Ws audit/native/libsoimodclient-arm64.so 2>&1 |
+              grep -Eai 'ptrace|process_vm|socket|connect|send|recv|open|read|write|dlopen|dlsym|kill|fork|exec|system' |
+              head -n 500 || true
+          } >> audit/report.txt
+          rm -rf audit/native
+      - name: Isolated Android launch smoke test
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 33
+          arch: x86_64
+          profile: pixel_2
+          disable-animations: true
+          script: |
+            set -e
+            adb install -r candidate.apk
+            adb shell appops set com.soimod.external SYSTEM_ALERT_WINDOW allow || true
+            adb logcat -c
+            adb shell monkey -p com.soimod.external -c android.intent.category.LAUNCHER 1
+            sleep 10
+            adb exec-out screencap -p > audit/launch.png
+            adb shell uiautomator dump /sdcard/window.xml || true
+            adb pull /sdcard/window.xml audit/window.xml || true
+            adb logcat -d -v threadtime > audit/logcat.txt
+            {
+              echo
+              echo "=== EMULATOR SMOKE TEST ==="
+              adb shell dumpsys activity activities | grep -E 'mResumedActivity|topResumedActivity' | head -n 10 || true
+              grep -Eai 'FATAL EXCEPTION|AndroidRuntime|com\.soimod\.external|WolfSight' audit/logcat.txt | tail -n 300 || true
+            } >> audit/report.txt
+      - name: Preserve the single candidate with its report
+        run: |
+          cp candidate.apk audit/WolfSight-External-v1.2.apk
+          sha256sum audit/WolfSight-External-v1.2.apk > audit/WolfSight-External-v1.2.apk.sha256
       - name: Upload audit report
         uses: actions/upload-artifact@v4
         with:
