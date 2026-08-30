@@ -1,0 +1,44 @@
+name: Temporary FF Mod Candidate Metadata Audit
+
+on:
+  push:
+    paths:
+      - ".github/workflows/ff-mod-audit.yml"
+  workflow_dispatch:
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Install metadata tools
+        run: |
+          python -m pip install --disable-pip-version-check -q yt-dlp
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq
+      - name: Collect video metadata and outbound links
+        run: |
+          mkdir -p audit
+          videos=(
+            wv1_aJndYB4
+            ERaBS4KoqPI
+            fipYV5QOLvE
+            sElFXkr6IWQ
+            RfiEnSRxA5U
+            p_yFaZkQEOA
+          )
+          for id in "${videos[@]}"; do
+            yt-dlp --skip-download --no-warnings --dump-single-json "https://www.youtube.com/watch?v=${id}" > "audit/${id}.json" || true
+            if [ -s "audit/${id}.json" ]; then
+              jq '{id,title,channel,upload_date,duration,description,webpage_url}' "audit/${id}.json" > "audit/${id}.summary.json"
+            fi
+          done
+          grep -Erho 'https?://[^[:space:]<>"()]+' audit/*.summary.json | sed 's/\\n.*//' | sort -u > audit/all-urls.txt || true
+          find audit -maxdepth 1 -type f -printf '%f %s bytes\n' | sort > audit/manifest.txt
+      - name: Upload audit metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: ff-mod-candidate-metadata
+          path: audit/
+          retention-days: 1
+          if-no-files-found: error
