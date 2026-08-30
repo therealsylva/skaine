@@ -1,4 +1,4 @@
-name: Temporary FF Mod Candidate Metadata Audit
+name: Temporary FF Mod Binary Audit
 
 on:
   push:
@@ -7,38 +7,111 @@ on:
   workflow_dispatch:
 
 jobs:
-  collect:
+  audit:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
-      - name: Install metadata tools
+      - name: Install APK inspection tools
         run: |
-          python -m pip install --disable-pip-version-check -q yt-dlp
           sudo apt-get update -qq
-          sudo apt-get install -y -qq jq
-      - name: Collect video metadata and outbound links
+          sudo apt-get install -y -qq aapt apksigner apktool file unzip p7zip-full
+          python -m pip install --disable-pip-version-check -q requests beautifulsoup4
+      - name: Download candidate using runner bandwidth
+        env:
+          MEDIAFIRE_PAGE: https://www.mediafire.com/file/eajcz8u5dox36lk/SILENT+CHEATS+FREE+VERSION.apks/file
         run: |
           mkdir -p audit
-          videos=(
-            wv1_aJndYB4
-            ERaBS4KoqPI
-            fipYV5QOLvE
-            sElFXkr6IWQ
-            RfiEnSRxA5U
-            p_yFaZkQEOA
-          )
-          for id in "${videos[@]}"; do
-            yt-dlp --skip-download --no-warnings --dump-single-json "https://www.youtube.com/watch?v=${id}" > "audit/${id}.json" || true
-            if [ -s "audit/${id}.json" ]; then
-              jq '{id,title,channel,upload_date,duration,description,webpage_url}' "audit/${id}.json" > "audit/${id}.summary.json"
-            fi
+          python - <<'PY'
+          import os, requests
+          from bs4 import BeautifulSoup
+          page = os.environ["MEDIAFIRE_PAGE"]
+          s = requests.Session()
+          r = s.get(page, timeout=30, headers={"User-Agent":"Mozilla/5.0"})
+          r.raise_for_status()
+          soup = BeautifulSoup(r.text, "html.parser")
+          node = soup.select_one("a#downloadButton")
+          if not node or not node.get("href"):
+              raise SystemExit("MediaFire direct download link not found")
+          direct = node["href"]
+          with open("audit/source.txt", "w") as f:
+              f.write(page + "\n" + direct.split("?")[0] + "\n")
+          with s.get(direct, stream=True, timeout=120, headers={"User-Agent":"Mozilla/5.0"}) as d:
+              d.raise_for_status()
+              with open("candidate.apks", "wb") as out:
+                  for chunk in d.iter_content(1024 * 1024):
+                      if chunk:
+                          out.write(chunk)
+          PY
+      - name: Inspect package structure and signatures
+        run: |
+          {
+            echo "=== DOWNLOAD ==="
+            stat -c 'size_bytes=%s' candidate.apks
+            sha256sum candidate.apks
+            file candidate.apks
+            echo
+            echo "=== ARCHIVE TOP LEVEL ==="
+            unzip -l candidate.apks | head -n 120 || true
+          } > audit/report.txt
+          mkdir -p extracted
+          if unzip -t candidate.apks >/dev/null 2>&1; then
+            unzip -q -o candidate.apks -d extracted
+          else
+            cp candidate.apks extracted/candidate.apk
+          fi
+          find extracted -type f -name '*.apk' -print0 | while IFS= read -r -d '' apk; do
+            safe_name=$(echo "$apk" | tr '/ ' '__')
+            {
+              echo
+              echo "=== APK: $apk ==="
+              stat -c 'size_bytes=%s' "$apk"
+              sha256sum "$apk"
+              file "$apk"
+              echo
+              echo "--- BADGING ---"
+              aapt dump badging "$apk" 2>&1 | head -n 35 || true
+              echo
+              echo "--- SIGNER ---"
+              apksigner verify --print-certs "$apk" 2>&1 || true
+              echo
+              echo "--- PERMISSIONS ---"
+              aapt dump permissions "$apk" 2>&1 || true
+              echo
+              echo "--- NATIVE LIBRARIES ---"
+              unzip -l "$apk" 2>/dev/null | grep -E 'lib/.*\.so$' | head -n 200 || true
+            } >> audit/report.txt
+            mkdir -p "audit/unpacked/$safe_name"
+            unzip -q -o "$apk" -d "audit/unpacked/$safe_name" || true
           done
-          grep -Erho 'https?://[^[:space:]<>"()]+' audit/*.summary.json | sed 's/\\n.*//' | sort -u > audit/all-urls.txt || true
+      - name: Search for hooks, menus, suspicious access and endpoints
+        run: |
+          {
+            echo
+            echo "=== MOD/HOOK INDICATORS ==="
+            find audit/unpacked -type f \( -name '*.so' -o -name '*.dex' \) -print0 |
+              xargs -0 -r strings -a 2>/dev/null |
+              grep -Eai 'imgui|kittymemory|dobby|substrate|mshook|and64inlinehook|aimbot|aim.?kill|silent.?aim|wall.?hack|skeleton|esp.?line|no.?recoil|mod.?menu|hack.?menu|speed.?hack|bypass|antiban' |
+              sort -u | head -n 500 || true
+            echo
+            echo "=== NETWORK ENDPOINT INDICATORS ==="
+            find audit/unpacked -type f \( -name '*.so' -o -name '*.dex' -o -name '*.xml' \) -print0 |
+              xargs -0 -r strings -a 2>/dev/null |
+              grep -Eao 'https?://[^[:space:]"<>]+' |
+              sed 's/[),;].*$//' | sort -u | head -n 500 || true
+            echo
+            echo "=== HIGH-RISK PERMISSION SUMMARY ==="
+            grep -Eai 'READ_SMS|RECEIVE_SMS|SEND_SMS|READ_CONTACTS|WRITE_CONTACTS|READ_CALL_LOG|WRITE_CALL_LOG|BIND_ACCESSIBILITY_SERVICE|REQUEST_INSTALL_PACKAGES|SYSTEM_ALERT_WINDOW|QUERY_ALL_PACKAGES|MANAGE_EXTERNAL_STORAGE|DEVICE_ADMIN' audit/report.txt | sort -u || true
+            echo
+            echo "=== OFFICIAL SIGNER REFERENCE ==="
+            echo "Garena certificate SHA-1 expected: 5b320be50be7e5d01e5608b666432be0a9449794"
+            echo "Garena certificate SHA-256 expected: ca49d7c4a007cf614ebb3d31b5e33989ff8af482be73b1f04996b61d054649ec"
+          } >> audit/report.txt
+          rm -rf audit/unpacked
           find audit -maxdepth 1 -type f -printf '%f %s bytes\n' | sort > audit/manifest.txt
-      - name: Upload audit metadata
+      - name: Upload audit report
         uses: actions/upload-artifact@v4
         with:
-          name: ff-mod-candidate-metadata
+          name: ff-mod-binary-audit
           path: audit/
           retention-days: 1
           if-no-files-found: error
