@@ -1,0 +1,79 @@
+name: Extract Itel A70 V1755 boot images
+
+on:
+  push:
+    paths:
+      - ".github/workflows/extract-a70-firmware.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Free runner disk space
+        run: |
+          df -h
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache
+          sudo docker system prune --all --force || true
+          df -h
+
+      - name: Install extraction tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends megatools p7zip-full cmake build-essential git
+
+      - name: Download exact signed V1755 firmware
+        env:
+          FIRMWARE_URL: https://mega.nz/file/M9YSWYDR#cjdfpX-q1R0-To5__YJApHZTNwFFmgElfyB_Ua5Zy2Y
+        run: |
+          mkdir -p download
+          megadl --path download "$FIRMWARE_URL"
+          find download -maxdepth 1 -type f -printf '%f %s bytes\n'
+          test "$(find download -maxdepth 1 -type f | wc -l)" -eq 1
+
+      - name: Extract PAC archive
+        run: |
+          ARCHIVE="$(find download -maxdepth 1 -type f | head -n 1)"
+          mkdir -p firmware
+          7z x -y "$ARCHIVE" -ofirmware
+          rm -f "$ARCHIVE"
+          PAC="$(find firmware -type f -iname '*.pac' | head -n 1)"
+          test -n "$PAC"
+          echo "PAC_PATH=$PAC" >> "$GITHUB_ENV"
+          ls -lh "$PAC"
+          df -h
+
+      - name: Build PAC extractor
+        run: |
+          git clone --depth 1 https://github.com/iscle/unpac.git
+          cmake -S unpac -B unpac/build
+          cmake --build unpac/build --parallel
+
+      - name: Extract firmware partitions
+        run: |
+          mkdir -p partitions
+          unpac/build/unpac "$PAC_PATH" partitions
+          find partitions -maxdepth 2 -type f -printf '%f %s bytes\n' | sort
+
+      - name: Collect root-relevant images
+        run: |
+          mkdir -p artifact
+          find partitions -type f \( -iname 'boot.img' -o -iname 'init_boot.img' -o -iname 'vendor_boot.img' -o -iname 'vbmeta.img' -o -iname 'vbmeta_*.img' \) -exec cp -v {} artifact/ \;
+          test -f artifact/boot.img
+          printf '%s\n' 'A665L-SE673SBCEFHJKLMNOPQRSTUVWX-TGo-OP-260116V1755' > artifact/BUILD.txt
+          sha256sum artifact/* > artifact/SHA256SUMS.txt
+          ls -lh artifact
+
+      - name: Upload extracted boot images
+        uses: actions/upload-artifact@v4
+        with:
+          name: itel-a70-a665l-v1755-boot-images
+          path: artifact/
+          retention-days: 3
+          compression-level: 0
+          if-no-files-found: error
