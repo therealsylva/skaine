@@ -4,6 +4,9 @@ on:
   push:
     paths:
       - ".github/workflows/extract-a70-firmware.yml"
+  pull_request:
+    paths:
+      - ".github/a70-extract-trigger"
   workflow_dispatch:
 
 permissions:
