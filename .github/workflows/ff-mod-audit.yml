@@ -1,4 +1,4 @@
-name: Temporary FF Mod Binary Audit
+name: Temporary WolfSight APK Audit
 
 on:
   push:
@@ -18,7 +18,7 @@ jobs:
           python -m pip install --disable-pip-version-check -q requests beautifulsoup4
       - name: Download candidate using runner bandwidth
         env:
-          MEDIAFIRE_PAGE: https://www.mediafire.com/file/eajcz8u5dox36lk/SILENT+CHEATS+FREE+VERSION.apks/file
+          MEDIAFIRE_PAGE: https://www.mediafire.com/file/3i4neptme76kdq2/WolfSight%2BExternal%2Bv1.2.apk/file
         run: |
           mkdir -p audit
           python - <<'PY'
@@ -37,7 +37,7 @@ jobs:
               f.write(page + "\n" + direct.split("?")[0] + "\n")
           with s.get(direct, stream=True, timeout=120, headers={"User-Agent":"Mozilla/5.0"}) as d:
               d.raise_for_status()
-              with open("candidate.apks", "wb") as out:
+              with open("candidate.apk", "wb") as out:
                   for chunk in d.iter_content(1024 * 1024):
                       if chunk:
                           out.write(chunk)
@@ -46,18 +46,20 @@ jobs:
         run: |
           {
             echo "=== DOWNLOAD ==="
-            stat -c 'size_bytes=%s' candidate.apks
-            sha256sum candidate.apks
-            file candidate.apks
+            stat -c 'size_bytes=%s' candidate.apk
+            sha256sum candidate.apk
+            file candidate.apk
             echo
             echo "=== ARCHIVE TOP LEVEL ==="
-            unzip -l candidate.apks | head -n 120 || true
+            unzip -l candidate.apk | head -n 120 || true
           } > audit/report.txt
           mkdir -p extracted
-          if unzip -t candidate.apks >/dev/null 2>&1; then
-            unzip -q -o candidate.apks -d extracted
+          if aapt dump badging candidate.apk >/dev/null 2>&1; then
+            cp candidate.apk extracted/candidate.apk
+          elif unzip -t candidate.apk >/dev/null 2>&1; then
+            unzip -q -o candidate.apk -d extracted
           else
-            cp candidate.apks extracted/candidate.apk
+            cp candidate.apk extracted/candidate.apk
           fi
           find extracted -type f -name '*.apk' -print0 | while IFS= read -r -d '' apk; do
             safe_name=$(echo "$apk" | tr '/ ' '__')
@@ -111,7 +113,7 @@ jobs:
       - name: Upload audit report
         uses: actions/upload-artifact@v4
         with:
-          name: ff-mod-binary-audit
+          name: wolfsight-apk-audit
           path: audit/
           retention-days: 1
           if-no-files-found: error
