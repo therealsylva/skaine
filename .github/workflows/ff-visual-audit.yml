@@ -1,0 +1,65 @@
+name: Temporary FF Visual Pack Link Audit
+
+on:
+  push:
+    paths:
+      - ".github/workflows/ff-visual-audit.yml"
+  workflow_dispatch:
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Extract current OB54 video metadata
+        run: |
+          mkdir -p report
+          python -m pip install --disable-pip-version-check -q yt-dlp requests
+          python - <<'PY'
+          import json, re, subprocess, requests
+          ids = ["Qs9JnylRR5o", "0ErRx4voT-E", "ajs0b7-reJQ", "RhaaLDjR_Qs"]
+          out = []
+          for vid in ids:
+              url = f"https://www.youtube.com/watch?v={vid}"
+              item = {"id": vid, "url": url}
+              try:
+                  raw = subprocess.check_output(
+                      ["yt-dlp", "--skip-download", "--no-warnings", "--dump-single-json", url],
+                      text=True, timeout=120
+                  )
+                  j = json.loads(raw)
+                  item.update({
+                      "title": j.get("title"),
+                      "channel": j.get("channel"),
+                      "upload_date": j.get("upload_date"),
+                      "description": j.get("description"),
+                      "duration": j.get("duration"),
+                  })
+              except Exception as e:
+                  item["yt_dlp_error"] = repr(e)
+                  try:
+                      html = requests.get(url, headers={"User-Agent":"Mozilla/5.0"}, timeout=30).text
+                      m = re.search(r'"shortDescription":"((?:\\.|[^"\\])*)"', html)
+                      if m:
+                          item["description_fallback"] = json.loads('"' + m.group(1) + '"')
+                      item["fallback_urls"] = sorted(set(re.findall(r'https?://[^"\\\\ ]+', html)))[:300]
+                  except Exception as e2:
+                      item["fallback_error"] = repr(e2)
+              out.append(item)
+          with open("report/videos.json", "w") as f:
+              json.dump(out, f, indent=2, ensure_ascii=False)
+          with open("report/links.txt", "w") as f:
+              for item in out:
+                  f.write(f"=== {item.get('title') or item['id']} ===\n")
+                  text = item.get("description") or item.get("description_fallback") or ""
+                  f.write(text + "\n")
+                  for link in re.findall(r'https?://\S+', text):
+                      f.write("LINK " + link.rstrip(".,);]") + "\n")
+                  f.write("\n")
+          PY
+      - name: Upload metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: ff-visual-pack-links
+          path: report/
+          retention-days: 1
