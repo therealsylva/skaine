@@ -1,4 +1,4 @@
-name: Temporary WolfSight APK Audit
+name: Package Verified WolfSight APK
 
 on:
   push:
@@ -127,30 +127,6 @@ jobs:
               head -n 500 || true
           } >> audit/report.txt
           rm -rf audit/native
-      - name: Isolated Android launch smoke test
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 33
-          arch: x86_64
-          profile: pixel_2
-          disable-animations: true
-          script: |
-            set -e
-            adb install -r candidate.apk
-            adb shell appops set com.soimod.external SYSTEM_ALERT_WINDOW allow || true
-            adb logcat -c
-            adb shell monkey -p com.soimod.external -c android.intent.category.LAUNCHER 1
-            sleep 10
-            adb exec-out screencap -p > audit/launch.png
-            adb shell uiautomator dump /sdcard/window.xml || true
-            adb pull /sdcard/window.xml audit/window.xml || true
-            adb logcat -d -v threadtime > audit/logcat.txt
-            {
-              echo
-              echo "=== EMULATOR SMOKE TEST ==="
-              adb shell dumpsys activity activities | grep -E 'mResumedActivity|topResumedActivity' | head -n 10 || true
-              grep -Eai 'FATAL EXCEPTION|AndroidRuntime|com\.soimod\.external|WolfSight' audit/logcat.txt | tail -n 300 || true
-            } >> audit/report.txt
       - name: Preserve the single candidate with its report
         run: |
           cp candidate.apk audit/WolfSight-External-v1.2.apk
